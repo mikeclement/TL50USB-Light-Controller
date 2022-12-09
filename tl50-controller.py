@@ -1,11 +1,46 @@
+
 import serial
 import binascii
 import time
+from optparse import OptionParser
 
-command_string = [0xF4, 0x41, 0xC1, 0x1F, 0x00, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
 cmd_checksum = [0x00, 0x00]
 
-def set_animation(animation, cmd_string):
+def compute_checksum(commands):
+    """
+    compute_checksum calcuates the correct checksum based on the Banner Engineering serial protocol documentation
+    
+    returns: a list with two hex bytes
+    """
+    
+    command_total = sum(commands)
+    ones_comp = command_total ^ 0xFFFF
+    
+    byte1 = (ones_comp & 0xff00) >>8
+    byte2 = (ones_comp & 0x00ff)
+    #print(hex(byte1) + ':'+hex(byte2))
+    return [byte2, byte1] 
+
+
+def set_segment(**kwargs):
+    """
+    set_segment creates a 30 byte hex command to send to the TL50 light via a USB serial using the following minimum inputs:
+    
+    - intensity = see color_intensity_index
+    - color_num_one = see colors_index
+    - color_num_two = see colors_index
+    - animation = see animation_index
+    
+    returns (default): a binary formatted hex string of 30 bytes, including a checksum.
+    returns (debug mode): a binary formatted hex string of 30 bytes, including a checksum, but using a static debug_string list of hex bytes instead of a generated one.
+    
+    Note:
+    for the Chase animation: color #2 is the background, color #1 is the moving color 
+    """
+    command_string = [0xF4, 0x41, 0xC1, 0x1F, 0x00, 0x0d, 0x00, 0xd, 0x00, 0x00, 0x00, 0x00, 0x00, 00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    
+    debug_string =   [0xF4, 0x41, 0xC1, 0x1F, 0x00, 0x00, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    
     animation_index = {
       "off": 0x00,
       "steady": 0x01,
@@ -16,12 +51,6 @@ def set_animation(animation, cmd_string):
       "chase": 0x06,
       "intens_sweep": 0x07
     }
-    
-    animation_type = animation_index.get(animation, 0x00)
-    #set the 5th byte to the correct  
-    cmd_string[6] = animation_type
-
-def set_color(color, color_num, intensity, cmd_string):
     colors_index = {
       "green": 0x00,
       "red": 0x01,
@@ -38,7 +67,6 @@ def set_color(color, color_num, intensity, cmd_string):
       "rose": 0xc,
       "white": 0xd
     }
-    
     color_intensity_index = {
       "high": 0x00,
       "low": 0x01,
@@ -46,112 +74,69 @@ def set_color(color, color_num, intensity, cmd_string):
       "off": 0x03,
     }
     
-    color_inten = color_intensity_index.get(intensity, 0x00)
-    color_hex = colors_index.get(color, 0x00)
-    #set the 5th byte to the correct  
-    if color_num == 1:
-        #cmd_string[5] = color_hex
-        cmd_string[5] = color_hex
-    if color_num == 2:  
-        cmd_string[7] = color_hex
+    color_inten = color_intensity_index.get(kwargs['intensity'], 0x00)
+        
+    color_one = colors_index.get(kwargs['color_num_one'], 0xd)
+    color_two = colors_index.get(kwargs['color_num_two'], 0xd)
     
+    command_string[5] = color_one #color one 
+    command_string[7] = color_two #color two
     
-
-def compute_checksum(commands):
-    command_total = sum(commands)
-    ones_comp = command_total ^ 0xFFFF
+    animation_type = animation_index.get(kwargs['animation'], 0x00)
+    #set the 6th byte to the correct hex string 
+    command_string[6] = animation_type
     
-    byte1 = (ones_comp & 0xff00) >>8
-    byte2 = (ones_comp & 0x00ff)
-    #print(hex(byte1) + ':'+hex(byte2))
-    return [byte2, byte1]
+    #generate the array
+    if options.debug == True:
+        light_command = bytearray( debug_string + compute_checksum(debug_string) )
+    else:
+        light_command = bytearray( command_string + compute_checksum(command_string) )
+    
+    if options.debug == True:
+        print("Args are the following:")
+        print(kwargs)
+        #print("Byte Command")
+        #print(light_command)
+        print("Light Number:")
+        print(color_num)
+        
+    return light_command  
 
-def gen_light_cmd(cmd_string):
-    light_command = bytearray( cmd_string + compute_checksum(cmd_string) )
-    return light_command   
+#CLI Parsing Init
+parser = OptionParser()
+parser.add_option("--debug", action="store_true", dest="debug")
 
+(options, args) = parser.parse_args() #create a varible to store the state of the debug command
    
+#Create a new serial object and set the baudrate and port   
 ser = serial.Serial()
 ser.baudrate = 19200
+#ser.write_timeout=2
+#ser.inter_byte_timeout=2
+
+ser1 = serial.Serial()
+ser1.baudrate = 19200
 
 #single hight frosted
-#ser.port = '/dev/tty.usbserial-FT791OX9'
+ser.port = '/dev/tty.usbserial-FT791OX9'
 
 #double hight frosted
 #ser.port = '/dev/tty.usbserial-FT7BVSDW'
 
 #clear light
-ser.port= '/dev/tty.usbserial-FT4VLXSZ'
+#ser1.port= '/dev/tty.usbserial-FT4VLXSZ'
     
 ser.open()
+#ser1.open()
 
-set_color('blue', 1, 'low', command_string)
-#set_color('orange', 1, command_string)
-#set_color('green', 2, command_string)
-#set_animation('half_half_rot', command_string)
-set_animation('steady', command_string)
-
-if ser.is_open:
-    #ser.reset_output_buffer()
+if ser.is_open:    
+    #ser.write(set_segment(color_num="1", intensity="high", color="green", animation="intens_sweep"))
+    #ser1.write(set_segment(color_num="1", intensity="high", color="green", animation="flash"))
+    #time.sleep(0.09)
+    #time.sleep(5)
     
-    #Solid Blue
-    set_animation('steady', command_string)
-    set_color('blue', 1, 'high', command_string)    
-    light_command = bytearray(command_string+compute_checksum(command_string))
-    ser.write( gen_light_cmd(command_string) )
+    ser.write(set_segment(intensity="high", color_num_one="rose", color_num_two="blue", animation="two_color_flash"))
     time.sleep(0.09)
+    #time.sleep(5)
     
-    time.sleep(5)
-    
-    set_animation('flash', command_string)
-    set_color('blue', 1, 'high', command_string)    
-    light_command = bytearray(command_string+compute_checksum(command_string))
-    ser.write( gen_light_cmd(command_string) )
-    time.sleep(0.09)
-    
-    time.sleep(5)
-    
-    #Two Tone Green Rotation
-    set_animation('half_half_rot', command_string)
-    set_color('green', 1, 'high', command_string)
-    set_color('lime_green', 2, 'high', command_string)    
-    ser.write(gen_light_cmd(command_string))
-    time.sleep(0.09)
-    
-    time.sleep(5)
-    
-    #Green Pulsing
-    set_animation('intens_sweep', command_string)
-    set_color('green', 1, 'high', command_string)
-    ser.write(gen_light_cmd(command_string))
-    time.sleep(0.09)
-    
-    time.sleep(5)
-    
-    #Green and Red Two Color Flash
-    set_animation('two_color_flash', command_string)
-    set_color('green', 1, 'high', command_string)
-    set_color('red', 2, 'high', command_string)    
-    ser.write(gen_light_cmd(command_string))
-    time.sleep(0.09)
-    
-    time.sleep(5)
-    
-    #Red and Green Chase
-    set_animation('chase', command_string)
-    set_color('orange', 1, 'high', command_string)
-    set_color('green', 2, 'high', command_string)    
-    ser.write(gen_light_cmd(command_string))
-    time.sleep(0.09)
-    
-    time.sleep(5)
-    
-    #Turn off light
-    set_color('green', 1, 'high', command_string)
-    set_animation('off', command_string)
-    ser.write(gen_light_cmd(command_string))
-    time.sleep(0.09)
-    
-    #ser.flush()
-
     ser.close()
