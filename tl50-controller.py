@@ -128,25 +128,31 @@ def off():
     return build_command_bytearray(Color.NONE, Intensity.OFF, Animation.NONE, Speed.NONE, Pattern.NONE, Color.NONE,
                                    Intensity.NONE, Rotation.NONE, Audible.NONE)
 
+
 def steady(color, intensity):
     return build_command_bytearray(color, intensity, Animation.STEADY, Speed.NONE, Pattern.NONE, Color.NONE,
                                    Intensity.NONE, Rotation.NONE, Audible.NONE)
+
 
 def flash(color, intensity, speed, pattern):
     return build_command_bytearray(color, intensity, Animation.FLASH, speed, pattern, Color.NONE,
                                    Intensity.NONE, Rotation.NONE, Audible.NONE)
 
+
 def two_color_flash(color1, intensity1, color2, intensity2, speed, pattern):
     return build_command_bytearray(color1, intensity1, Animation.TWO_COLOR_FLASH, speed, pattern, color2,
                                    intensity2, Rotation.NONE, Audible.NONE)
+
 
 def half_half(color1, intensity1, color2, intensity2):
     return build_command_bytearray(color1, intensity1, Animation.HALF_HALF, Speed.NONE, Pattern.NONE, color2,
                                    intensity2, Rotation.NONE, Audible.NONE)
 
+
 def half_half_rotate(color1, intensity1, color2, intensity2, speed, rotation):
     return build_command_bytearray(color1, intensity1, Animation.HALF_HALF_ROTATE, speed, Pattern.NONE, color2,
                                    intensity2, rotation, Audible.NONE)
+
 
 def chase(color1, intensity1, color2, intensity2, speed, rotation):
     return build_command_bytearray(color1, intensity1, Animation.CHASE, speed, Pattern.NONE, color2,
@@ -171,6 +177,8 @@ if __name__ == '__main__':
         change(flash(Color.AMBER, Intensity.HIGH, Speed.STANDARD, Pattern.STROBE), 2)
         change(two_color_flash(Color.YELLOW, Intensity.HIGH, Color.BLUE, Intensity.HIGH, Speed.FAST, Pattern.NORMAL), 2)
         change(half_half(Color.SPRING_GREEN, Intensity.HIGH, Color.MAGENTA, Intensity.HIGH), 2)
-        change(half_half_rotate(Color.SPRING_GREEN, Intensity.HIGH, Color.MAGENTA, Intensity.HIGH, Speed.FAST, Rotation.CLOCKWISE), 2)
-        change(chase(Color.SPRING_GREEN, Intensity.HIGH, Color.MAGENTA, Intensity.HIGH, Speed.SLOW, Rotation.COUNTER_CLOCKWISE), 2)
+        change(half_half_rotate(Color.SPRING_GREEN, Intensity.HIGH, Color.MAGENTA, Intensity.HIGH, Speed.FAST,
+                                Rotation.CLOCKWISE), 2)
+        change(chase(Color.SPRING_GREEN, Intensity.HIGH, Color.MAGENTA, Intensity.HIGH, Speed.SLOW,
+                     Rotation.COUNTER_CLOCKWISE), 2)
         change(off(), 0)
