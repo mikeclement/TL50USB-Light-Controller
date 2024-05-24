@@ -61,46 +61,133 @@ enum Audible {
     Sos = 0x03,
 }
 
-fn build(color1: Color, intensity1: Intensity, animation: Animation,
-    speed: Speed, pattern: Pattern, color2: Color, intensity2: Intensity,
-    rotation: Rotation, audible: Audible) -> [u8; 38] {
-    
-    // https://info.bannerengineering.com/cs/groups/public/documents/literature/218025.pdf
-    let mut b: [u8; 38] = [0; 38];
-
-    // Fixed header bytes
-    b[0] = 0xf4;
-    b[1] = 0x41;
-    b[2] = 0xc1;
-    b[3] = 0x1f;
-    b[4] = 0x00;
-    
-    b[5] = (color1 as u8 & 0xf)
-        | ((intensity1 as u8 & 0x7) << 4);
-
-    b[6] = (animation as u8 & 0x7)
-        | ((speed as u8 & 0x3) << 3)
-        | ((pattern as u8 & 0x7) << 5);
-
-    b[7] = (color2 as u8 & 0xf)
-        | ((intensity2 as u8 & 0x7) << 4)
-        | ((rotation as u8 & 0x1) << 7);
-
-    // 8..34 are always zeroes
-
-    b[35] = audible as u8;
-
-    let byte_sum: u16 = b.iter().map(|&b| b as u16).sum();
-    let ones_comp = byte_sum ^ 0xffff;
-    b[36] = (ones_comp & 0x00ff) as u8;
-    b[37] = ((ones_comp & 0xff00) >> 8) as u8;
-
-    b
+struct TL50Message {
+    color1: Color,
+    intensity1: Intensity,
+    animation: Animation,
+    speed: Speed,
+    pattern: Pattern,
+    color2: Color,
+    intensity2: Intensity,
+    rotation: Rotation,
+    audible: Audible,
 }
 
-fn main() {
-    let v = build(Color::Red, Intensity::High, Animation::Steady, Speed::Standard,
-        Pattern::Normal, Color::Green, Intensity::High, Rotation::CounterClockwise,
-        Audible::Off);
-    println!("build() produced: {:02X?}", v);
+use std::io;
+use bytes::{BufMut, BytesMut};
+use futures::{stream::StreamExt, SinkExt};
+use tokio_util::codec::{Decoder, Encoder};
+
+struct TL50Codec;
+
+impl Decoder for TL50Codec {
+    type Item = TL50Message;
+    type Error = io::Error;
+
+    fn decode(&mut self, _: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        Ok(None)
+    }
+}
+
+impl Encoder<TL50Message> for TL50Codec {
+    type Error = io::Error;
+
+    fn encode(&mut self, item: TL50Message, buf: &mut BytesMut) -> Result<(), io::Error> {
+        // https://info.bannerengineering.com/cs/groups/public/documents/literature/218025.pdf
+        buf.reserve(38);
+
+        // Fixed header bytes
+        buf.put_u8(0xf4);
+        buf.put_u8(0x41);
+        buf.put_u8(0xc1);
+        buf.put_u8(0x1f);
+        buf.put_u8(0x00);
+    
+        buf.put_u8((item.color1 as u8 & 0xf)
+            | ((item.intensity1 as u8 & 0x7) << 4));
+
+        buf.put_u8((item.animation as u8 & 0x7)
+            | ((item.speed as u8 & 0x3) << 3)
+            | ((item.pattern as u8 & 0x7) << 5));
+
+        buf.put_u8((item.color2 as u8 & 0xf)
+            | ((item.intensity2 as u8 & 0x7) << 4)
+            | ((item.rotation as u8 & 0x1) << 7));
+
+        // 8..34 are always zeroes
+        for _ in 8..35 {
+            buf.put_u8(0x00);
+        }
+
+        buf.put_u8(item.audible as u8);
+
+        let byte_sum: u16 = buf.iter().map(|&b| b as u16).sum();
+        let ones_comp = byte_sum ^ 0xffff;
+        buf.put_u8((ones_comp & 0x00ff) as u8);
+        buf.put_u8(((ones_comp & 0xff00) >> 8) as u8);
+
+        println!("{:02X?}", buf);
+
+        Ok(())
+    }
+}
+
+//-------------------------
+
+use tokio::time::{sleep, Duration};
+use tokio_serial;
+use tokio_serial::SerialPortBuilderExt;
+
+#[tokio::main]
+async fn main() -> tokio_serial::Result<()> {
+    let port_name = "/dev/tty.usbserial-FT791P1N";
+    let port_speed = 19200;
+
+    let port = tokio_serial::new(port_name, port_speed).open_native_async()?;
+
+    let (mut writer, _) = TL50Codec.framed(port).split();
+
+    tokio::spawn(async move {
+        loop {
+            let message_on = TL50Message {
+                color1: Color::Green,
+                intensity1: Intensity::High,
+                animation: Animation::Steady,
+                speed: Speed::Standard,
+                pattern: Pattern::Normal,
+                color2: Color::Green,
+                intensity2: Intensity::High,
+                rotation: Rotation::CounterClockwise,
+                audible: Audible::Off
+            };
+
+            let mut write_result = writer.send(message_on).await;
+            sleep(Duration::from_secs(2)).await;
+            match write_result {
+                Ok(_) => (),
+                Err(err) => println!("{:?}", err),
+            }
+
+            let message_off = TL50Message {
+                color1: Color::Green,
+                intensity1: Intensity::Off,
+                animation: Animation::Steady,
+                speed: Speed::Standard,
+                pattern: Pattern::Normal,
+                color2: Color::Green,
+                intensity2: Intensity::High,
+                rotation: Rotation::CounterClockwise,
+                audible: Audible::Off
+            };
+
+            write_result = writer.send(message_off).await;
+            sleep(Duration::from_secs(2)).await;
+            match write_result {
+                Ok(_) => (),
+                Err(err) => println!("{:?}", err),
+            }
+        }
+    });
+
+    loop {}
 }
