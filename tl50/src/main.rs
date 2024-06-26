@@ -175,7 +175,6 @@ impl TL50Driver {
         // If we've gotten to here, there should be a working serial port
         let mut write_succeeded: bool = true;
         if let Some(port) = &mut self.port {
-            // TODO make this async
             let (mut writer, _) = TL50Codec.framed(port).split();
             if let Err(err) = writer.send(command).await {
                 println!("Error writing: {:?}", err);
@@ -187,14 +186,39 @@ impl TL50Driver {
             self.port = None;
         }
     }
+
+    async fn off(&mut self) {
+        let message = TL50Message {
+            color1: Color::Green,
+            intensity1: Intensity::Off,
+            animation: Animation::Steady,
+            speed: Speed::Standard,
+            pattern: Pattern::Normal,
+            color2: Color::Green,
+            intensity2: Intensity::High,
+            rotation: Rotation::CounterClockwise,
+            audible: Audible::Off
+        };
+
+        self.send_command(message).await;
+    }
+
+    async fn steady(&mut self, color: Color, intensity: Intensity) {
+        let message = TL50Message {
+            color1: color,
+            intensity1: intensity,
+            animation: Animation::Steady,
+            speed: Speed::Standard,
+            pattern: Pattern::Normal,
+            color2: Color::Green,
+            intensity2: Intensity::High,
+            rotation: Rotation::CounterClockwise,
+            audible: Audible::Off
+        };
+
+        self.send_command(message).await;
+    }
 }
-
-
-// TL50 abstraction
-
-// TODO
-//  - Make easy functions for sending common commands
-//  - Implement a retry loop until a successful connection and write happens
 
 // Main
 
@@ -210,34 +234,10 @@ async fn main() -> tokio_serial::Result<()> {
 
     tokio::spawn(async move {
         loop {
-            let message_on = TL50Message {
-                color1: Color::Green,
-                intensity1: Intensity::High,
-                animation: Animation::Steady,
-                speed: Speed::Standard,
-                pattern: Pattern::Normal,
-                color2: Color::Green,
-                intensity2: Intensity::High,
-                rotation: Rotation::CounterClockwise,
-                audible: Audible::Off
-            };
-
-            tl50.send_command(message_on).await;
+            tl50.steady(Color::Green, Intensity::High).await;
             sleep(Duration::from_secs(delay)).await;
 
-            let message_off = TL50Message {
-                color1: Color::Green,
-                intensity1: Intensity::Off,
-                animation: Animation::Steady,
-                speed: Speed::Standard,
-                pattern: Pattern::Normal,
-                color2: Color::Green,
-                intensity2: Intensity::High,
-                rotation: Rotation::CounterClockwise,
-                audible: Audible::Off
-            };
-
-            tl50.send_command(message_off).await;
+            tl50.off().await;
             sleep(Duration::from_secs(delay)).await;
         }
     });
