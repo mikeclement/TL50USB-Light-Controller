@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+// Definition of TL50 message, and a codec to do the encoding work
+
 enum Color {
     Green = 0x00,
     Red = 0x01,
@@ -94,6 +96,7 @@ impl Encoder<TL50Message> for TL50Codec {
 
     fn encode(&mut self, item: TL50Message, buf: &mut BytesMut) -> Result<(), io::Error> {
         // https://info.bannerengineering.com/cs/groups/public/documents/literature/218025.pdf
+        buf.clear();
         buf.reserve(38);
 
         // Fixed header bytes
@@ -126,26 +129,84 @@ impl Encoder<TL50Message> for TL50Codec {
         buf.put_u8((ones_comp & 0x00ff) as u8);
         buf.put_u8(((ones_comp & 0xff00) >> 8) as u8);
 
-        println!("{:02X?}", buf);
+        println!("Encoded: {:02X?}", buf);
 
         Ok(())
     }
 }
 
-//-------------------------
+// Serial connection management
 
-use tokio::time::{sleep, Duration};
 use tokio_serial;
 use tokio_serial::SerialPortBuilderExt;
+use tokio_serial::SerialStream;
+
+struct TL50Driver {
+    port_path: String,
+    port_speed: u32,
+    port: Option<SerialStream>,
+}
+
+impl TL50Driver {
+    fn new(path: String, speed: u32) -> Self {
+        Self {
+            port_path: path,
+            port_speed: speed,
+            port: None,
+        }
+    }
+
+    async fn send_command(&mut self, command: TL50Message) {
+        if let None = self.port {
+            let path: &str = &*self.port_path;
+            let port = tokio_serial::new(path, self.port_speed).open_native_async();
+            match port {
+                Ok(p) => {
+                    println!("Successfully opened {:?}", self.port_path);
+                    self.port = Some(p);
+                },
+                Err(e) => {
+                    println!("Error opening {:?}: {:?}", self.port_path, e);
+                    return;
+                }
+            }
+        }
+
+        // If we've gotten to here, there should be a working serial port
+        let mut write_succeeded: bool = true;
+        if let Some(port) = &mut self.port {
+            // TODO make this async
+            let (mut writer, _) = TL50Codec.framed(port).split();
+            if let Err(err) = writer.send(command).await {
+                println!("Error writing: {:?}", err);
+                write_succeeded = false;
+            }
+        }
+
+        if !write_succeeded {
+            self.port = None;
+        }
+    }
+}
+
+
+// TL50 abstraction
+
+// TODO
+//  - Make easy functions for sending common commands
+//  - Implement a retry loop until a successful connection and write happens
+
+// Main
+
+use tokio::time::{sleep, Duration};
 
 #[tokio::main]
 async fn main() -> tokio_serial::Result<()> {
-    let port_name = "/dev/tty.usbserial-FT791P1N";
+    let port_name: String = "/dev/tty.usbserial-FT791P1N".to_owned();
     let port_speed = 19200;
+    let delay = 1;
 
-    let port = tokio_serial::new(port_name, port_speed).open_native_async()?;
-
-    let (mut writer, _) = TL50Codec.framed(port).split();
+    let mut tl50 = TL50Driver::new(port_name, port_speed);
 
     tokio::spawn(async move {
         loop {
@@ -161,12 +222,8 @@ async fn main() -> tokio_serial::Result<()> {
                 audible: Audible::Off
             };
 
-            let mut write_result = writer.send(message_on).await;
-            sleep(Duration::from_secs(2)).await;
-            match write_result {
-                Ok(_) => (),
-                Err(err) => println!("{:?}", err),
-            }
+            tl50.send_command(message_on).await;
+            sleep(Duration::from_secs(delay)).await;
 
             let message_off = TL50Message {
                 color1: Color::Green,
@@ -180,12 +237,8 @@ async fn main() -> tokio_serial::Result<()> {
                 audible: Audible::Off
             };
 
-            write_result = writer.send(message_off).await;
-            sleep(Duration::from_secs(2)).await;
-            match write_result {
-                Ok(_) => (),
-                Err(err) => println!("{:?}", err),
-            }
+            tl50.send_command(message_off).await;
+            sleep(Duration::from_secs(delay)).await;
         }
     });
 
