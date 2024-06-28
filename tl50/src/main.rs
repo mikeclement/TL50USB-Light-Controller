@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
-// Definition of TL50 message, and a codec to do the encoding work
+// Enums for the bitfields in the TL50 Advanced Segment Indication Command,
+// and a struct with all the needed fields.
 
 enum Color {
     Green = 0x00,
@@ -63,7 +64,7 @@ enum Audible {
     Sos = 0x03,
 }
 
-struct TL50Message {
+struct AdvSegInd {
     color1: Color,
     intensity1: Intensity,
     animation: Animation,
@@ -75,67 +76,128 @@ struct TL50Message {
     audible: Audible,
 }
 
-use std::io;
+// Enum of commands we can send to the TL50, and encoder functions for each
+
 use bytes::{BufMut, BytesMut};
+
+enum TL50CommandEnum {
+    EnAdvSegMode,
+    ChAdvSegInd(AdvSegInd),
+}
+
+fn encode_en_adv_seg_mode(
+    buf: &mut BytesMut) -> Result<(), io::Error> {
+    // Note we do not accrue messages, so that we can handle serial errors
+    buf.clear();
+    buf.reserve(8);
+
+    buf.put_u8(0xF4);
+    buf.put_u8(0x41);
+    buf.put_u8(0xC7);
+    buf.put_u8(0x01);
+    buf.put_u8(0x00);
+    buf.put_u8(0x01);
+    buf.put_u8(0x01);
+    buf.put_u8(0xFE);
+
+    println!("EnAdvSegMode: {:02X?}", buf);
+
+    Ok(())
+}
+
+fn encode_ch_adv_seg_ind(
+    item: AdvSegInd,
+    buf: &mut BytesMut) -> Result<(), io::Error> {
+    // Note we do not accrue messages, so that we can handle serial errors
+    buf.clear();
+    buf.reserve(38);
+
+    // Fixed header bytes
+    buf.put_u8(0xf4);
+    buf.put_u8(0x41);
+    buf.put_u8(0xc1);
+    buf.put_u8(0x1f);
+    buf.put_u8(0x00);
+
+    buf.put_u8((item.color1 as u8 & 0xf)
+        | ((item.intensity1 as u8 & 0x7) << 4));
+
+    buf.put_u8((item.animation as u8 & 0x7)
+        | ((item.speed as u8 & 0x3) << 3)
+        | ((item.pattern as u8 & 0x7) << 5));
+
+    buf.put_u8((item.color2 as u8 & 0xf)
+        | ((item.intensity2 as u8 & 0x7) << 4)
+        | ((item.rotation as u8 & 0x1) << 7));
+
+    // 8..34 are always zeroes
+    for _ in 8..35 {
+        buf.put_u8(0x00);
+    }
+
+    buf.put_u8(item.audible as u8);
+
+    // Checksum
+    let byte_sum: u16 = buf.iter().map(|&b| b as u16).sum();
+    let ones_comp = byte_sum ^ 0xffff;
+    buf.put_u8((ones_comp & 0x00ff) as u8);
+    buf.put_u8(((ones_comp & 0xff00) >> 8) as u8);
+
+    println!("ChAdvSegInd: {:02X?}", buf);
+
+    Ok(())
+}
+
+// Serialization is implemented using tokio::codec, where a struct is
+// encoded into bytes during the send operation. For now, only the encode
+// side is implemented and only for select messages; however, the TL50
+// does also emit response messages.
+//
+// The documentation for the serial protocol can be found here:
+// https://info.bannerengineering.com/cs/groups/public/documents/literature/218025.pdf
+
+use std::io;
 use futures::{stream::StreamExt, SinkExt};
 use tokio_util::codec::{Decoder, Encoder};
 
 struct TL50Codec;
 
 impl Decoder for TL50Codec {
-    type Item = TL50Message;
+    type Item = ();
     type Error = io::Error;
 
-    fn decode(&mut self, _: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, _: &mut BytesMut)
+        -> Result<Option<Self::Item>, Self::Error> {
         Ok(None)
     }
 }
 
-impl Encoder<TL50Message> for TL50Codec {
+impl Encoder<TL50CommandEnum> for TL50Codec {
     type Error = io::Error;
 
-    fn encode(&mut self, item: TL50Message, buf: &mut BytesMut) -> Result<(), io::Error> {
-        // https://info.bannerengineering.com/cs/groups/public/documents/literature/218025.pdf
-        buf.clear();
-        buf.reserve(38);
-
-        // Fixed header bytes
-        buf.put_u8(0xf4);
-        buf.put_u8(0x41);
-        buf.put_u8(0xc1);
-        buf.put_u8(0x1f);
-        buf.put_u8(0x00);
-    
-        buf.put_u8((item.color1 as u8 & 0xf)
-            | ((item.intensity1 as u8 & 0x7) << 4));
-
-        buf.put_u8((item.animation as u8 & 0x7)
-            | ((item.speed as u8 & 0x3) << 3)
-            | ((item.pattern as u8 & 0x7) << 5));
-
-        buf.put_u8((item.color2 as u8 & 0xf)
-            | ((item.intensity2 as u8 & 0x7) << 4)
-            | ((item.rotation as u8 & 0x1) << 7));
-
-        // 8..34 are always zeroes
-        for _ in 8..35 {
-            buf.put_u8(0x00);
+    fn encode(&mut self,
+        item: TL50CommandEnum,
+        buf: &mut BytesMut) -> Result<(), io::Error> {
+        match item {
+            TL50CommandEnum::EnAdvSegMode => {
+                return encode_en_adv_seg_mode(buf);
+            }
+            TL50CommandEnum::ChAdvSegInd(cmd) => {
+                return encode_ch_adv_seg_ind(cmd, buf);
+            }
         }
-
-        buf.put_u8(item.audible as u8);
-
-        let byte_sum: u16 = buf.iter().map(|&b| b as u16).sum();
-        let ones_comp = byte_sum ^ 0xffff;
-        buf.put_u8((ones_comp & 0x00ff) as u8);
-        buf.put_u8(((ones_comp & 0xff00) >> 8) as u8);
-
-        println!("Encoded: {:02X?}", buf);
-
-        Ok(())
     }
 }
 
-// Serial connection management
+// Since the TL50 is a USB device that may be unplugged and replugged at any
+// time, we want to be robust and reconnect as needed. TL50Driver attempts to
+// detect when an error occurs and to reconnect to the serial device.
+//
+// Note there are other ways to achieve this effect, which might be better:
+//  1. Monitor the underlying system for device events, or for the special
+//     file to disappear and reappear
+//  2. Implement the decoder above and actually handle incoming messages
+//     from the TL50, resetting if there's an error or timeout
 
 use tokio_serial;
 use tokio_serial::SerialPortBuilderExt;
@@ -156,25 +218,41 @@ impl TL50Driver {
         }
     }
 
-    async fn send_command(&mut self, command: TL50Message) {
-        if let None = self.port {
-            let path: &str = &*self.port_path;
-            let port = tokio_serial::new(path, self.port_speed).open_native_async();
-            match port {
-                Ok(p) => {
-                    println!("Successfully opened {:?}", self.port_path);
-                    self.port = Some(p);
-                },
-                Err(e) => {
-                    println!("Error opening {:?}: {:?}", self.port_path, e);
-                    return;
-                }
+    // If port isn't set up, try to open and report if there's an open port
+    fn check_port_and_open(&mut self) -> bool {
+        if let Some(_) = self.port {
+            return true;
+        }
+
+        let path: &str = &*self.port_path;
+        let port = tokio_serial::new(path, self.port_speed)
+            .open_native_async();
+        match port {
+            Ok(p) => {
+                println!("Successfully opened {:?}", self.port_path);
+                self.port = Some(p);
+                return true;
+            },
+            Err(e) => {
+                println!("Error opening {:?}: {:?}", self.port_path, e);
+                return false;
             }
+        }
+    }
+
+    // Returns true if port is open and write succeeds
+    async fn send_command(&mut self, command: TL50CommandEnum) -> bool {
+        // If necessary, attempt to set up a serial connection
+        if !self.check_port_and_open() {
+            return false;
         }
 
         // If we've gotten to here, there should be a working serial port
+        // We'll still catch errors while sending, since there could be a
+        // race with the USB being unplugged
         let mut write_succeeded: bool = true;
         if let Some(port) = &mut self.port {
+            // This line is the magic that invokes the encoder above
             let (mut writer, _) = TL50Codec.framed(port).split();
             if let Err(err) = writer.send(command).await {
                 println!("Error writing: {:?}", err);
@@ -182,13 +260,22 @@ impl TL50Driver {
             }
         }
 
+        // If the write failed, try reconnecting to the serial device next time
         if !write_succeeded {
             self.port = None;
         }
+
+        write_succeeded
     }
 
-    async fn off(&mut self) {
-        let message = TL50Message {
+    // Enable Advanced Segment Mode
+    async fn adv_seg_mode(&mut self) -> bool {
+        self.send_command(TL50CommandEnum::EnAdvSegMode).await
+    }
+
+    // Turn light off
+    async fn off(&mut self) -> bool {
+        let cmd = AdvSegInd {
             color1: Color::Green,
             intensity1: Intensity::Off,
             animation: Animation::Steady,
@@ -200,11 +287,12 @@ impl TL50Driver {
             audible: Audible::Off
         };
 
-        self.send_command(message).await;
+        self.send_command(TL50CommandEnum::ChAdvSegInd(cmd)).await
     }
 
-    async fn steady(&mut self, color: Color, intensity: Intensity) {
-        let message = TL50Message {
+    // Set light to a steady color and intensity
+    async fn steady(&mut self, color: Color, intensity: Intensity) -> bool {
+        let cmd = AdvSegInd {
             color1: color,
             intensity1: intensity,
             animation: Animation::Steady,
@@ -216,7 +304,7 @@ impl TL50Driver {
             audible: Audible::Off
         };
 
-        self.send_command(message).await;
+        self.send_command(TL50CommandEnum::ChAdvSegInd(cmd)).await
     }
 }
 
