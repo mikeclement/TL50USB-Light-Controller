@@ -3,6 +3,7 @@
 // Enums for the bitfields in the TL50 Advanced Segment Indication Command,
 // and a struct with all the needed fields.
 
+#[derive(Copy, Clone)]
 enum Color {
     Green = 0x00,
     Red = 0x01,
@@ -20,6 +21,7 @@ enum Color {
     White = 0x0d,
 }
 
+#[derive(Copy, Clone)]
 enum Intensity {
     High = 0x00,
     Low = 0x01,
@@ -27,6 +29,7 @@ enum Intensity {
     Off = 0x03,
 }
 
+#[derive(Copy, Clone)]
 enum Animation {
     Off = 0x00,
     Steady = 0x01,
@@ -38,12 +41,14 @@ enum Animation {
     IntensitySweep = 0x07,
 }
 
+#[derive(Copy, Clone)]
 enum Speed {
     Standard = 0x00,
     Fast = 0x01,
     Slow = 0x02,
 }
 
+#[derive(Copy, Clone)]
 enum Pattern {
     Normal = 0x00,
     Strobe = 0x01,
@@ -52,11 +57,13 @@ enum Pattern {
     Random = 0x04,
 }
 
+#[derive(Copy, Clone)]
 enum Rotation {
     CounterClockwise = 0x00,
     Clockwise = 0x01,
 }
 
+#[derive(Copy, Clone)]
 enum Audible {
     Off = 0x00,
     Steady = 0x01,
@@ -64,6 +71,7 @@ enum Audible {
     Sos = 0x03,
 }
 
+#[derive(Copy, Clone)]
 struct AdvSegInd {
     color1: Color,
     intensity1: Intensity,
@@ -80,6 +88,7 @@ struct AdvSegInd {
 
 use bytes::{BufMut, BytesMut};
 
+#[derive(Copy, Clone)]
 enum TL50CommandEnum {
     EnAdvSegMode,
     ChAdvSegInd(AdvSegInd),
@@ -199,6 +208,8 @@ impl Encoder<TL50CommandEnum> for TL50Codec {
 //  2. Implement the decoder above and actually handle incoming messages
 //     from the TL50, resetting if there's an error or timeout
 
+use tokio::time::{sleep, Duration};
+use tokio::sync::mpsc;
 use tokio_serial;
 use tokio_serial::SerialPortBuilderExt;
 use tokio_serial::SerialStream;
@@ -207,13 +218,17 @@ struct TL50Driver {
     port_path: String,
     port_speed: u32,
     port: Option<SerialStream>,
+    rx: mpsc::Receiver<TL50CommandEnum>,
 }
 
 impl TL50Driver {
-    fn new(path: String, speed: u32) -> Self {
+    fn new(path: String,
+        speed: u32,
+        rx: mpsc::Receiver<TL50CommandEnum>) -> Self {
         Self {
             port_path: path,
             port_speed: speed,
+            rx: rx,
             port: None,
         }
     }
@@ -268,67 +283,99 @@ impl TL50Driver {
         write_succeeded
     }
 
-    // Enable Advanced Segment Mode
-    async fn adv_seg_mode(&mut self) -> bool {
-        self.send_command(TL50CommandEnum::EnAdvSegMode).await
-    }
+    async fn run(&mut self, cycle_time: Duration) {
+        // Hold the next command we should send to TL50
+        let mut next_command = TL50CommandEnum::EnAdvSegMode;
+        // Hold the last command we received from channel
+        let mut last_change = TL50CommandEnum::EnAdvSegMode;
 
-    // Turn light off
-    async fn off(&mut self) -> bool {
-        let cmd = AdvSegInd {
-            color1: Color::Green,
-            intensity1: Intensity::Off,
-            animation: Animation::Steady,
-            speed: Speed::Standard,
-            pattern: Pattern::Normal,
-            color2: Color::Green,
-            intensity2: Intensity::High,
-            rotation: Rotation::CounterClockwise,
-            audible: Audible::Off
-        };
-
-        self.send_command(TL50CommandEnum::ChAdvSegInd(cmd)).await
-    }
-
-    // Set light to a steady color and intensity
-    async fn steady(&mut self, color: Color, intensity: Intensity) -> bool {
-        let cmd = AdvSegInd {
-            color1: color,
-            intensity1: intensity,
-            animation: Animation::Steady,
-            speed: Speed::Standard,
-            pattern: Pattern::Normal,
-            color2: Color::Green,
-            intensity2: Intensity::High,
-            rotation: Rotation::CounterClockwise,
-            audible: Audible::Off
-        };
-
-        self.send_command(TL50CommandEnum::ChAdvSegInd(cmd)).await
+        loop {
+            // Check for a new command
+            if let Ok(command) = self.rx.try_recv() {
+                next_command = command.clone();
+                last_change = command;
+            }
+            
+            // Send command to TL50
+            if self.send_command(next_command).await {
+                // If success, set back to default message for next loop
+                next_command = TL50CommandEnum::EnAdvSegMode;
+            } else {
+                // If failure, need to reassert last-known change next loop
+                next_command = last_change;
+            }
+            
+            // Sleep
+            sleep(cycle_time).await;
+        }
     }
 }
 
-// Main
+// Functions that wrap what we want to send
 
-use tokio::time::{sleep, Duration};
+// Enable Advanced Segment Mode
+async fn adv_seg_mode(tx: mpsc::Sender<TL50CommandEnum>) {
+    tx.send(TL50CommandEnum::EnAdvSegMode).await;
+}
+
+// Turn light off
+async fn off(tx: mpsc::Sender<TL50CommandEnum>) {
+    let cmd = AdvSegInd {
+        color1: Color::Green,
+        intensity1: Intensity::Off,
+        animation: Animation::Steady,
+        speed: Speed::Standard,
+        pattern: Pattern::Normal,
+        color2: Color::Green,
+        intensity2: Intensity::High,
+        rotation: Rotation::CounterClockwise,
+        audible: Audible::Off
+    };
+
+    tx.send(TL50CommandEnum::ChAdvSegInd(cmd)).await;
+}
+
+// Set light to a steady color and intensity
+async fn steady(tx: mpsc::Sender<TL50CommandEnum>,
+    color: Color,
+    intensity: Intensity) {
+    let cmd = AdvSegInd {
+        color1: color,
+        intensity1: intensity,
+        animation: Animation::Steady,
+        speed: Speed::Standard,
+        pattern: Pattern::Normal,
+        color2: Color::Green,
+        intensity2: Intensity::High,
+        rotation: Rotation::CounterClockwise,
+        audible: Audible::Off
+    };
+
+    tx.send(TL50CommandEnum::ChAdvSegInd(cmd)).await;
+}
+
+// Main
 
 #[tokio::main]
 async fn main() -> tokio_serial::Result<()> {
     let port_name: String = "/dev/tty.usbserial-FT791P1N".to_owned();
     let port_speed = 19200;
-    let delay = 1;
+    let tl50_loop_time = Duration::from_secs(1);
+    let main_loop_time = Duration::from_secs(5);
 
-    let mut tl50 = TL50Driver::new(port_name, port_speed);
-
+    let (tx, mut rx) = mpsc::channel(32);
+    let mut tl50 = TL50Driver::new(port_name, port_speed, rx);
     tokio::spawn(async move {
-        loop {
-            tl50.steady(Color::Green, Intensity::High).await;
-            sleep(Duration::from_secs(delay)).await;
-
-            tl50.off().await;
-            sleep(Duration::from_secs(delay)).await;
-        }
+        tl50.run(tl50_loop_time).await;
     });
 
-    loop {}
+    loop {
+        println!("Green light on!");
+        steady(tx.clone(), Color::Green, Intensity::High).await;
+        sleep(main_loop_time).await;
+
+        println!("Light off!");
+        off(tx.clone()).await;
+        sleep(main_loop_time).await;
+    }
 }
