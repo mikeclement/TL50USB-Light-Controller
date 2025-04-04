@@ -3,7 +3,7 @@
 // Enums for the bitfields in the TL50 Advanced Segment Indication Command,
 // and a struct with all the needed fields.
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Color {
     Green = 0x00,
     Red = 0x01,
@@ -21,7 +21,7 @@ pub enum Color {
     White = 0x0d,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Intensity {
     High = 0x00,
     Low = 0x01,
@@ -29,7 +29,7 @@ pub enum Intensity {
     Off = 0x03,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Animation {
     Off = 0x00,
     Steady = 0x01,
@@ -41,14 +41,14 @@ pub enum Animation {
     IntensitySweep = 0x07,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Speed {
     Standard = 0x00,
     Fast = 0x01,
     Slow = 0x02,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Pattern {
     Normal = 0x00,
     Strobe = 0x01,
@@ -57,13 +57,13 @@ pub enum Pattern {
     Random = 0x04,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Rotation {
     CounterClockwise = 0x00,
     Clockwise = 0x01,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Audible {
     Off = 0x00,
     Steady = 0x01,
@@ -71,7 +71,7 @@ pub enum Audible {
     Sos = 0x03,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AdvSegInd {
     color1: Color,
     intensity1: Intensity,
@@ -91,7 +91,7 @@ pub struct AdvSegInd {
 
 use bytes::{BufMut, BytesMut};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum TL50CommandEnum {
     EnAdvSegMode,
     ChAdvSegInd(AdvSegInd),
@@ -378,3 +378,100 @@ impl TL50ActorHandle {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn test_encode_enable_advanced_segment_mode() {
+        let mut buf = BytesMut::new();
+        let result = encode_en_adv_seg_mode(&mut buf);
+        assert!(result.is_ok());
+        assert_eq!(buf.freeze().as_ref(), &[0xF4, 0x41, 0xC7, 0x01, 0x00, 0x01, 0x01, 0xFE]);
+    }
+
+    #[test]
+    fn test_encode_change_advanced_segment_indication() {
+        // Example Case: Steady Red High, Blue Low, Clockwise, Off Audible
+        let cmd = AdvSegInd {
+            color1: Color::Red, intensity1: Intensity::High,
+            animation: Animation::Steady, speed: Speed::Standard, pattern: Pattern::Normal,
+            color2: Color::Green, intensity2: Intensity::High,
+            rotation: Rotation::CounterClockwise, audible: Audible::Off,
+        };
+        let mut buf = BytesMut::new();
+        let result = encode_ch_adv_seg_ind(cmd, &mut buf);
+        assert!(result.is_ok());
+        let expected = [
+            0xF4, 0x41, 0xC1, 0x1F, 0x00, 0x01, 0x01, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0xE8, 0xFD
+        ];
+        assert_eq!(buf.freeze().as_ref(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_handle_steady_sends_correct_command() {
+        let (tx, mut rx) = mpsc::channel(8); // Create channel for test
+        let mut handle = TL50ActorHandle { tx }; // Instantiate handle directly
+
+        handle.steady(Color::Cyan, Intensity::Low).await;
+
+        let received_result = rx.try_recv(); // Or rx.recv().await if needed
+        assert!(received_result.is_ok(), "Failed to receive command");
+        let received_cmd = received_result.unwrap();
+
+        match received_cmd {
+            TL50CommandEnum::ChAdvSegInd(adv_seg) => {
+                assert_eq!(adv_seg.color1, Color::Cyan);
+                assert_eq!(adv_seg.intensity1, Intensity::Low);
+                assert_eq!(adv_seg.animation, Animation::Steady);
+                // TODO check other fields if necessary
+            }
+            _ => panic!("Received incorrect command type from handle"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_off_sends_correct_command() {
+        let (tx, mut rx) = mpsc::channel(8); // Create channel for test
+        let mut handle = TL50ActorHandle { tx }; // Instantiate handle directly
+
+        handle.off().await;
+
+        let received_result = rx.try_recv(); // Or rx.recv().await if needed
+        assert!(received_result.is_ok(), "Failed to receive command");
+        let received_cmd = received_result.unwrap();
+
+        match received_cmd {
+            TL50CommandEnum::ChAdvSegInd(adv_seg) => {
+                assert_eq!(adv_seg.color1, Color::Green);
+                assert_eq!(adv_seg.intensity1, Intensity::Off);
+                assert_eq!(adv_seg.animation, Animation::Steady);
+                // TODO check other fields if necessary
+            }
+            _ => panic!("Received incorrect command type from handle"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_adv_seg_sends_correct_command() {
+        let (tx, mut rx) = mpsc::channel(8); // Create channel for test
+        let mut handle = TL50ActorHandle { tx }; // Instantiate handle directly
+
+        handle.adv_seg_mode().await;
+
+        let received_result = rx.try_recv(); // Or rx.recv().await if needed
+        assert!(received_result.is_ok(), "Failed to receive command");
+        let received_cmd = received_result.unwrap();
+
+        match received_cmd {
+            TL50CommandEnum::EnAdvSegMode => { }
+            _ => panic!("Received incorrect command type from handle"),
+        }
+    }
+}

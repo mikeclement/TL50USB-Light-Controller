@@ -3,8 +3,8 @@
 Basic Python and Rust code to control a Banner engineering TL50 USB enabled
 tower indicator.
 
-Original Python code by Liam O'Brien, with changes by Mike Clement. All Rust
-code by Mike Clement.
+Original Python code by Liam O'Brien, with changes by Mike Clement.
+Rust code by Mike Clement. Rust unit tests by Google Gemini.
 
 Product information:
 * https://www.youtube.com/watch?v=crRyCEbCWO8&ab_channel=BannerEngineering
